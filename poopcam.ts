@@ -1,49 +1,100 @@
+import { Config, JsonDB } from "node-json-db";
+
 export type PoopCammer = {
     userName: string;
     requestCount: number;
 };
 
 export abstract class PoopCam {
-    static #participants: PoopCammer[] = [];
-    static #totalRequests = 0;
+    static #db = new JsonDB(new Config('./save/poopcam.json', true, true));
+    static readonly #cammers_key = "/poopcammers";
+    static readonly #total_key = "/total_requests";
 
-    static request(userName: string): void {
-        let cammer = this.#participants.find((c) => c.userName === userName);
-        if (cammer === undefined) {
-            this.#participants.push({ userName: userName, requestCount: 1 });
-        } else {
-            cammer.requestCount++;
+    static async request(userName: string): Promise<void> {
+        let index = '';
+        let cammer: PoopCammer | undefined;
+        try {
+            cammer = await this.#db.find<PoopCammer>(this.#cammers_key, function(entry, idx) {
+                let c = <PoopCammer>entry;
+                if (c.userName === userName) {
+                    index = idx.toString();
+                    return true;
+                }
+
+                return false;
+            });
+        } catch(err) {
+            cammer = undefined;
         }
 
-        this.#participants.sort((a, b) => b.requestCount - a.requestCount);
-        this.#totalRequests++;
+        if (cammer === undefined) {
+            cammer = {userName: userName, requestCount: 0};
+
+        }
+
+        cammer.requestCount++;
+        let key = this.#cammers_key.concat('[', index.toString(),']');
+        await this.#db.push(key, cammer);
+        await this.#db.push(this.#total_key, (await this.getTotalRequests()) + 1);
     }
 
-    static getTotalRequests(): number {
-        return this.#totalRequests;
+    static async getTotalRequests(): Promise<number> {
+        return await this.#db.getObjectDefault<number>(this.#total_key, 0);
     }
 
-    static getTopCammer(): Readonly<PoopCammer> | undefined {
-        return this.getCammerByRank(0);
+    static async getTopCammer(): Promise<Readonly<PoopCammer> | undefined> {
+        return await this.getCammerByRank(0);
     }
 
-    static getCammerByRank(rank: number): Readonly<PoopCammer> | undefined {
+    static async getCammerByRank(rank: number): Promise<Readonly<PoopCammer> | undefined> {
         if (rank < 0) {
             return undefined;
         }
 
-        return this.#participants.at(rank);
+        let cammer_list = await this.load_sorted_cammer_list();
+        if (cammer_list === undefined) {
+            return undefined;
+        }
+
+        return cammer_list.at(rank);
     }
 
-    static getCammerByName(userName: string): Readonly<PoopCammer> | undefined {
-        return this.#participants.find((c) => c.userName === userName);
+    static async getCammerByName(userName: string): Promise<Readonly<PoopCammer> | undefined> {
+        try {
+            return await this.#db.find<PoopCammer>(this.#cammers_key, function(entry, idx) {
+                let c = <PoopCammer>entry;
+                if (c.userName === userName) {
+                    return true;
+                }
+
+                return false;
+            });
+        } catch(err) {
+            return undefined;
+        }
     }
 
-    static getRankByName(userName: string): number {
-        return this.#participants.findIndex((c) => c.userName === userName);
+    static async getRankByName(userName: string): Promise<number> {
+
+        let cammer_list = await this.load_sorted_cammer_list();
+        if (cammer_list === undefined) {
+            return -1
+        }
+
+        return cammer_list.findIndex((c) => c.userName === userName);
     }
 
-    static getTotalParticipants(): number {
-        return this.#participants.length;
+    static async getTotalParticipants(): Promise<number> {
+        try {
+            return await this.#db.count(this.#cammers_key);
+        } catch(err) {
+            return 0;
+        }
+    }
+
+    private static async load_sorted_cammer_list(): Promise<PoopCammer[] | undefined> {
+        return (await this.#db.getObjectDefault<PoopCammer[]>(this.#cammers_key, undefined))?.sort(function(a,b) {
+            return b.requestCount - a.requestCount;
+        });
     }
 }
